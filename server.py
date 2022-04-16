@@ -1,7 +1,5 @@
-from cmath import log
 import logging
 import threading
-import time
 import socket
 import signal
 import sys
@@ -16,8 +14,9 @@ class ServerSocket:
 		self.sock.settimeout(socket_config["timeout"] if "timeout" in socket_config else DEFAULT_TIMEOUT)
 		self.sock.bind((socket_config["host"] if "host" in socket_config else DEFAULT_HOST, socket_config["port"] if "port" in socket_config else DEFAULT_PORT))
 		self.logging = logging
+		self.logging.basicConfig(format="%(asctime)s: %(message)s", level=logging.INFO, datefmt="%H:%M:%S")
 		signal.signal(signal.SIGINT, self.sigint_handler)
-		self.connections = []
+		self.connections = {}
 
 	def listen(self):
 		self.sock.listen()
@@ -28,27 +27,48 @@ class ServerSocket:
 	def log_thread(self, msg):
 		self.logging.info(f"[THREAD]\t: {msg}")
 
-	def connection_handler(self, conn, addr):
+	def recv_handler(self, conn, addr):
 		try:
-			self.log_thread(f"Connected to {addr}")
-			self.connections.append(conn)
 			while True:
 				data = conn.recv(1024)
+				self.log_thread(f"[RECV -> {addr}] | {data}")
 				if data == b"[END]":
 					conn.close()
 					raise Exception()
-				conn.sendall(data)
 		except:
 			if conn:
 				conn.close()
 			self.log_thread(f"Connection to {addr} has been closed")
+
+	def send(self, addr, data):
+		if addr not in self.connections:
+			raise Exception()
+
+		conn = self.connections[addr]
+		if conn and data and len(data) > 0:
+			conn.sendall(data)
+			self.log_thread(f"[SENT -> {addr}] | {data}")
+
+	def send_handler(self, addr):
+		try:
+			while True:
+				msg = input()
+				self.send(addr, msg.encode())
+		except EOFError:
+			pass
+
+	def connection_handler(self, conn, addr):
+		self.log_thread(f"Connected to {addr}")
+		self.connections[addr] = conn
+		threading.Thread(target=self.recv_handler, args=(conn, addr)).start()
+		threading.Thread(target=self.send_handler, args=(addr,)).start()
 
 	def fork_connection(self, conn, addr):
 		threading.Thread(target=self.connection_handler, args=(conn, addr)).start()
 
 	def sigint_handler(self, signum, frame):
 		self.log_main("Closing all connection clients' connection")
-		for conn in self.connections:
+		for conn in list(self.connections.values()):
 			conn.close()
 		self.log_main("Closing socket connection")
 		if self.sock:
@@ -71,7 +91,6 @@ class ServerSocket:
 				self.log_main("Closing socket connection")
 				if self.sock:
 					self.sock.close()
-				
-logging.basicConfig(format="%(asctime)s: %(message)s", level=logging.INFO, datefmt="%H:%M:%S")
+
 server = ServerSocket(logging)
 server.start()
